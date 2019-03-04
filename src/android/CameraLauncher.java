@@ -87,6 +87,10 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
 
     private static final int JPEG = 0;                  // Take a picture of type JPEG
     private static final int PNG = 1;                   // Take a picture of type PNG
+    private static final int GPP = 2;
+    private static final int MP4 = 3;
+    private static final int WEBM = 4;
+    private static final int MKV = 5;
     private static final String JPEG_EXTENSION = ".jpg";
     private static final String PNG_EXTENSION = ".png";
     private static final String PNG_MIME_TYPE = "image/png";
@@ -98,11 +102,13 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
     public static final int PERMISSION_DENIED_ERROR = 20;
     public static final int TAKE_PIC_SEC = 0;
     public static final int SAVE_TO_ALBUM_SEC = 1;
+    public static final int TAKE_VIDEO_SEC = 2;
 
     private static final String LOG_TAG = "CameraLauncher";
 
     //Where did this come from?
     private static final int CROP_CAMERA = 100;
+    private static final int VIDEO_CAPTURE = 99;
 
     private static final String TIME_FORMAT = "yyyyMMdd_HHmmss";
 
@@ -110,6 +116,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
     private int targetWidth;                // desired width of the image
     private int targetHeight;               // desired height of the image
     private CordovaUri imageUri;            // Uri of captured image
+    private CordovaUri videoUri;            // Uri of captured video
     private int encodingType;               // Type of encoding to use
     private int mediaType;                  // What type of media to retrieve
     private int destType;                   // Source type (needs to be saved for the permission handling)
@@ -187,7 +194,8 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
 
             try {
                 if (this.srcType == CAMERA) {
-                    this.callTakePicture(destType, encodingType);
+                    if (this.mediaType==VIDEO) this.callTakeVideo(destType);
+                    else this.callTakePicture(destType, encodingType);
                 }
                 else if ((this.srcType == PHOTOLIBRARY) || (this.srcType == SAVEDPHOTOALBUM)) {
                     // FIXME: Stop always requesting the permission
@@ -290,6 +298,47 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
         }
     }
 
+    public void callTakeVideo(int returnType) {
+        boolean saveAlbumPermission = PermissionHelper.hasPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                && PermissionHelper.hasPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        boolean takeVideoPermission = PermissionHelper.hasPermission(this, Manifest.permission.CAMERA) && PermissionHelper.hasPermission(this, Manifest.permission.RECORD_AUDIO);
+
+        // CB-10120: The CAMERA permission does not need to be requested unless it is declared
+        // in AndroidManifest.xml. This plugin does not declare it, but others may and so we must
+        // check the package info to determine if the permission is present.
+
+        if (!takeVideoPermission) {
+            takeVideoPermission = true;
+            try {
+                PackageManager packageManager = this.cordova.getActivity().getPackageManager();
+                String[] permissionsInPackage = packageManager.getPackageInfo(this.cordova.getActivity().getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
+                if (permissionsInPackage != null) {
+                    for (String permission : permissionsInPackage) {
+                        if (permission.equals(Manifest.permission.CAMERA)) {
+                            takeVideoPermission = false;
+                            break;
+                        }
+                    }
+                }
+            } catch (NameNotFoundException e) {
+                // We are requesting the info for our package, so this should
+                // never be caught
+            }
+        }
+
+        if (takeVideoPermission && saveAlbumPermission) {
+            takeVideo(returnType);
+        } else if (saveAlbumPermission && !takeVideoPermission) {
+            PermissionHelper.requestPermissions(this, TAKE_VIDEO_SEC,
+                    new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO});
+        } else if (!saveAlbumPermission && takeVideoPermission) {
+            PermissionHelper.requestPermissions(this, TAKE_VIDEO_SEC,
+                    new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE});
+        } else {
+            PermissionHelper.requestPermissions(this, TAKE_VIDEO_SEC, new String[]{ Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE});
+        }
+    }
+
     public void takePicture(int returnType, int encodingType)
     {
         // Save the number of images currently on disk for later
@@ -324,6 +373,45 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
 //            LOG.d(LOG_TAG, "ERROR: You must use the CordovaInterface for this to work correctly. Please implement it in your activity");
     }
 
+    private void takeVideo(int returnType) {
+        // use video capture intent
+        Intent takeVideoIntent = new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
+        // // Set Video Name
+        String videoFileName = "VID_" + System.currentTimeMillis();
+        // Create File
+        File video = createCaptureFile(MP4, videoFileName);
+        // Specify file so that large image is captured and returned
+        this.videoUri = new CordovaUri(
+            FileProvider.getUriForFile(cordova.getActivity(),
+            applicationId + ".provider",
+            video));
+        // Uri = FileProvider.getUriForFile(
+        //     cordova.getActivity(),
+        //     applicationId + ".provider",
+        //     video
+        // );
+        Uri uri = Uri.parse(this.videoUri.getFileUri().toString());
+        takeVideoIntent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri);
+        // Add 60s limit to video
+        takeVideoIntent.putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT, 60);
+        // Set video quality
+        takeVideoIntent.putExtra(android.provider.MediaStore.EXTRA_VIDEO_QUALITY, this.mQuality);
+        // Size Limit
+        // takeVideoIntent.putExtra(android.provider.MediaStore.EXTRA_SIZE_LIMIT, this.mediaSizeLimit * 1024 * 1024);
+        //We can write to this URI, this will hopefully allow us to write files to get to the next step
+        takeVideoIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        takeVideoIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+        if (this.cordova != null) {
+            PackageManager mPm = this.cordova.getActivity().getPackageManager();
+            if ( takeVideoIntent.resolveActivity(mPm) != null ) {
+                this.cordova.startActivityForResult((CordovaPlugin) this, takeVideoIntent, VIDEO_CAPTURE);
+            }  else {
+                LOG.d(LOG_TAG, "Error: You don't have a default camera.  Your device may not be CTS complaint.");
+            }
+        }
+    }
+
     /**
      * Create a file in the applications temporary directory based upon the supplied encoding.
      *
@@ -350,14 +438,20 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
             fileName = fileName + JPEG_EXTENSION;
         } else if (encodingType == PNG) {
             fileName = fileName + PNG_EXTENSION;
+        } else if (encodingType == GPP){
+            fileName = fileName + ".3gp";
+        } else if (encodingType == MP4){
+            fileName = fileName + ".mp4";
+        } else if (encodingType == WEBM){
+            fileName = fileName + ".webm";
+        } else if (encodingType == MKV){
+            fileName = fileName + ".mkv";
         } else {
             throw new IllegalArgumentException("Invalid Encoding Type: " + encodingType);
         }
 
         return new File(getTempDirectoryPath(), fileName);
     }
-
-
 
     /**
      * Get image from photo library.
@@ -402,7 +496,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
         } else if (this.mediaType == ALLMEDIA) {
             // I wanted to make the type 'image/*, video/*' but this does not work on all versions
             // of android so I had to go with the wildcard search.
-            intent.setType("*/*");
+            intent.setType("image/*,video/*");
             title = GET_All;
             intent.setAction(Intent.ACTION_GET_CONTENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -769,9 +863,46 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
         // Get src and dest types from request code for a Camera Activity
         int srcType = (requestCode / 16) - 1;
         int destType = (requestCode % 16) - 1;
+        // If VIDEO
+        if (requestCode == VIDEO_CAPTURE) {
 
+            // If image available
+            if (resultCode == Activity.RESULT_OK) {
+                Uri data = null;
+                if (intent != null){
+                    // Get the uri of the video clip
+                    data = intent.getData();
+                }
+
+                // if( data == null){
+                //     File movie = new File(getTempDirectoryPath(), "Capture.avi");
+                //     data = Uri.fromFile(movie);
+                // }
+
+                // create a file object from the uri
+                if (data == null) {
+                    this.failPicture("Create Video Fail");
+                } else {
+                    // String fileLocation = FileHelper.getRealPath(data, this.cordova);
+                    // LOG.d(LOG_TAG, "File locaton is: " + fileLocation);
+                    // this.callbackContext.success(fileLocation);
+
+                    this.callbackContext.success(this.videoUri.getFileUri().toString());
+                } 
+            }
+
+            // If cancelled
+            else if (resultCode == Activity.RESULT_CANCELED) {
+                this.failPicture("No Media Selected");
+            }
+
+            // If something else
+            else {
+                this.failPicture("Did not complete!");
+            }
+        }
         // If Camera Crop
-        if (requestCode >= CROP_CAMERA) {
+        else if (requestCode >= CROP_CAMERA) {
             if (resultCode == Activity.RESULT_OK) {
 
                 // Because of the inability to pass through multiple intents, this hack will allow us
@@ -810,12 +941,12 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
                 } catch (IOException e) {
                     e.printStackTrace();
                     this.failPicture("Error capturing image.");
-                }
+                }  
             }
 
             // If cancelled
             else if (resultCode == Activity.RESULT_CANCELED) {
-                this.failPicture("No Image Selected");
+                this.failPicture("No Media Selected");
             }
 
             // If something else
@@ -1325,6 +1456,9 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
             case SAVE_TO_ALBUM_SEC:
                 this.getImage(this.srcType, this.destType, this.encodingType);
                 break;
+            case TAKE_VIDEO_SEC:
+                takeVideo(this.destType);
+                break;
         }
     }
 
@@ -1355,6 +1489,10 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
             state.putString("imageUri", this.imageUri.getFileUri().toString());
         }
 
+        if (this.videoUri != null) {
+            state.putString("videoUri", this.videoUri.getFileUri().toString());
+        }
+
         return state;
     }
 
@@ -1380,6 +1518,11 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
             this.imageUri = new CordovaUri(Uri.parse(state.getString("imageUri")));
         }
 
+        if (state.containsKey("videoUri")) {
+            //I have no idea what type of URI is being passed in
+            this.videoUri = new CordovaUri(Uri.parse(state.getString("videoUri")));
+        }
+
         this.callbackContext = callbackContext;
     }
 
@@ -1401,8 +1544,6 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
         File external_storage = Environment.getExternalStorageDirectory();
         String path = external_storage.getAbsolutePath() + partial_path;
         return path;
-
     }
-
 
 }
