@@ -385,12 +385,21 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
             FileProvider.getUriForFile(cordova.getActivity(),
             applicationId + ".provider",
             video));
-        // Uri = FileProvider.getUriForFile(
-        //     cordova.getActivity(),
-        //     applicationId + ".provider",
-        //     video
-        // );
-        Uri uri = Uri.parse(this.videoUri.getFileUri().toString());
+        // Uri uri = Uri.parse(this.videoUri.getFileUri().toString());
+
+        Uri uri;
+        if (Build.VERSION.SDK_INT < 24) {
+            uri = Uri.fromFile(video);
+        } else {
+            // uri = this.videoUri.getCorrectUri();
+            // uri = Uri.parse(video.getPath()); // My work-around for new SDKs, causes ActivityNotFoundException in API 10.
+            uri = FileProvider.getUriForFile(
+                cordova.getActivity(),
+                applicationId + ".provider",
+                video
+            );
+        }
+        
         takeVideoIntent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri);
         // Add 60s limit to video
         takeVideoIntent.putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT, 60);
