@@ -400,9 +400,11 @@ static NSString* toBase64(NSData* data) {
     NSString* filePath;
 
     // generate unique file name
-    int i = 1;
+    // int i = 1;
     do {
-        filePath = [NSString stringWithFormat:@"%@/%@%03d.%@", docsPath, CDV_PHOTO_PREFIX, i++, extension];
+        // NSString * timestamp = [NSString stringWithFormat:@"%f",[[NSDate date] timeIntervalSince1970] * 1000];
+        NSNumber *timestamp = [NSNumber numberWithDouble: [[NSDate date] timeIntervalSince1970]];
+        filePath = [NSString stringWithFormat:@"%@/%@%d.%@", docsPath, CDV_PHOTO_PREFIX, timestamp, extension];
     } while ([fileMgr fileExistsAtPath:filePath]);
 
     return filePath;
